@@ -28,6 +28,7 @@ class VisionAdapter(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(features * 4, in_channels, kernel_size=1, stride=1, bias=False) # 确保最终维度是 768
         )
+        self.mlp = nn.Linear(768, 1024)
 
     def _make_feature_align(self, in_shapes, out_shape=192, groups=1):
         align = nn.Module()
@@ -56,6 +57,7 @@ class VisionAdapter(nn.Module):
         layer2 = self.feature_align.layer2(layer2)
         layer3 = self.feature_align.layer3(layer3)
         layer4 = self.feature_align.layer4(layer4)
+        print("DEBUG: layer.shape:", layer1.shape)
 
         # 层级融合 (Concatenate) -> [B, 768, 40, 30]
         combined = torch.cat([layer1, layer2, layer3, layer4], dim=1)
@@ -65,6 +67,7 @@ class VisionAdapter(nn.Module):
 
         vision_tokens = downsampled.flatten(2).permute(0, 2, 1)
         # 每个图片最后的token_shape是[B, 300, 768]
+        vision_tokens = self.mlp(vision_tokens)  # [B, 300, 1024]
         return vision_tokens
 
 class VisionEncoder(nn.Module):
@@ -95,6 +98,7 @@ class VisionEncoder(nn.Module):
         # 每个patch是16x16像素，这里计算patch块的高宽数量
         patch_h = x.shape[-2] // 16
         patch_w = x.shape[-1] // 16
+        print("DEBUG: patch_h, patch_w:", patch_h, patch_w)
         num_patches = patch_h * patch_w
 
         # 从DINO每个层的提取出的特征形状都是相同的：
@@ -104,17 +108,66 @@ class VisionEncoder(nn.Module):
         features = self.backbone.get_intermediate_layers(
             x, n=self.intermediate_layer_idx[self.dino_type]
             )
+        print("DEGUG: features.shape:", features[0].shape)
         out = self.adapter(features, patch_h, patch_w)
         return out
     
+class MultiViewVisionEncoder(nn.Module):
+    def __init__(self, dino_type='base', 
+                 features=192, 
+                 out_channels=[96, 192, 384, 768], 
+                 backbone = None):
+        super(MultiViewVisionEncoder, self).__init__()
+        self.encoder = VisionEncoder(
+                    dino_type=dino_type,
+                    features=features,
+                    out_channels=out_channels,
+                    backbone=backbone
+                )
+    
+    def forward(self, x):
+        """
+        Input: x 形状为 [B, V, 3, 640, 480], V 是视角数量 (例如 3)
+        """
+        B, V, C, H, W = x.shape
+        x = x.view(B * V, C, H, W)
+
+        vision_tokens = self.encoder(x)  # [B*V, 300, 1024]
+        vision_tokens = vision_tokens.view(B, V, vision_tokens.shape[1], vision_tokens.shape[2])  # [B, V, 300, 1024]
+        multi_view_vision_tokens = vision_tokens.permute(0, 1, 2, 3).reshape(B, V * 300, 1024)
+        return multi_view_vision_tokens  # [B, V*300, 1024]
+
 if __name__ == '__main__':
     repo_dir = "./dinov3" 
     dino_ckpt = "web_pth/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     backbone = torch.hub.load(
             repo_dir, 
-            'dinov3_vits16', 
+            'dinov3_vitb16', 
             source='local', 
-            weights="/home/silei/WorkSpace_git/Mobile_Manipulation/web_pth/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"
+            weights="/home/silei/WorkSpace_git/Mobile_Manipulation/web_pth/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"
         )
+    # 测试单视角
+    # model = VisionEncoder(dino_type='base', 
+    #                       features=192, 
+    #                       out_channels=[96, 192, 384, 768], 
+    #                       backbone=backbone).to(device)
+    # dummy_input = torch.randn(1, 3, 640, 480).to(device)
+    # output = model(dummy_input)
+    # print("Output shape:", output.shape)  # 应该是 [1, 300, 768]，对应于300个视觉token，每个token是768维的特征向量
+
+    # 测试三视角相机输入
+    multi_encoder = MultiViewVisionEncoder(
+        dino_type='base', 
+        features=192, 
+        out_channels=[96, 192, 384, 768], 
+        backbone=backbone
+    ).to(device)
+
+    # 模拟输入: [Batch=1, Views=3, RGB=3, H=640, W=480]
+    dummy_multi_input = torch.randn(10, 3, 3, 640, 480).to(device)
+    
+    output = multi_encoder(dummy_multi_input)
+    
+    print("Multi-View Output shape:", output.shape) # torch.Size([B, 900, 1024])
 
