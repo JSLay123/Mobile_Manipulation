@@ -205,3 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# pretrained_dino_pth
+web_pth/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
