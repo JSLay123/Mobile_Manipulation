@@ -23,15 +23,13 @@ class PositionalEmbedding(nn.Module):
 class PositionalEmbedding2D(nn.Module):
     def __init__(self, d_model=512, height=20, width=15):
         """
-        正确的 2D 正弦位置编码
-        
         参数:
             d_model: token 的维度 (如 512)
             height, width: 2D 网格的高度和宽度
         """
         super().__init__()
         if d_model % 2 != 0:
-            raise ValueError("d_model 必须是偶数，因为需要分成 x 和 y 两部分")
+            raise ValueError("d_model must be even for 2D positional encoding.")
             
         self.d_model = d_model
         self.height = height
@@ -39,8 +37,6 @@ class PositionalEmbedding2D(nn.Module):
         
         # (height, width, d_model)
         pe = torch.zeros(height, width, d_model)
-        
-        # 将 d_model 维度分成两半，分别给 y 和 x
         d_half = d_model // 2
         
         # 为高度创建位置编码
