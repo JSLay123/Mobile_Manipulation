@@ -1,6 +1,16 @@
 import torch
 import torch.nn.functional as F
 
+
+def consistency_loss(h_base: torch.Tensor, h_joint: torch.Tensor) -> torch.Tensor:
+    """Hidden consistency loss between base and joint branch representations.
+
+    Encourages the two branches to share a common latent structure
+    while still being free to specialize.
+    """
+    return F.mse_loss(h_base.detach(), h_joint) + F.mse_loss(h_base, h_joint.detach())
+
+
 class ActionRectifiedFlow:
     def euler(self, x_t, v, dt):
         """ 使用欧拉方法步进 ODE: f(t+dt) = f(t) + dt * v """
@@ -34,3 +44,28 @@ class ActionRectifiedFlow:
         """
         v_target = x_1 - x_0
         return F.mse_loss(v_pred, v_target)
+
+
+class DualStreamRectifiedFlow:
+    def __init__(self):
+        self.base_flow = ActionRectifiedFlow()
+        self.joint_flow = ActionRectifiedFlow()
+
+    def make_targets(self, base_action_rel, joint_action_rel, t, base_noise=None, joint_noise=None):
+        base_xt, base_noise = self.base_flow.create_flow(base_action_rel, t, base_noise)
+        joint_xt, joint_noise = self.joint_flow.create_flow(joint_action_rel, t, joint_noise)
+        return {
+            "base_xt": base_xt,
+            "joint_xt": joint_xt,
+            "base_noise": base_noise,
+            "joint_noise": joint_noise,
+        }
+
+    def loss(self, base_pred, joint_pred, base_action_rel, joint_action_rel, base_noise, joint_noise):
+        base_loss = self.base_flow.mse_loss(base_pred, base_action_rel, base_noise)
+        joint_loss = self.joint_flow.mse_loss(joint_pred, joint_action_rel, joint_noise)
+        return {
+            "base_loss": base_loss,
+            "joint_loss": joint_loss,
+            "total_loss": base_loss + joint_loss,
+        }
