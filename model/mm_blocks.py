@@ -136,10 +136,7 @@ class DiT_Block(nn.Module):
 
         origin_x = x
         x = self.norm2(x)
-        print(x.shape)
-        print(c.shape)
         x = self.cross_attn(x, c, mask)
-        print(x.shape)
         x = x + origin_x
 
         origin_x = x
@@ -147,6 +144,46 @@ class DiT_Block(nn.Module):
         x = self.ffn(x)
         x = x + origin_x
 
+        return x
+
+
+class SharedDiTBlock(nn.Module):
+    """Shared DiT block: self-attn → cross-attn(vision) → FFN.
+
+    Used in the shared encoder segment before the base/joint split.
+    """
+    def __init__(self, hidden_size, num_heads):
+        super().__init__()
+        self.norm1 = RmsNorm(hidden_size, eps=1e-6)
+        self.attn = Attention(
+            dim=hidden_size, num_heads=num_heads,
+            qkv_bias=True, qk_norm=True,
+            norm_layer=RmsNorm,
+        )
+        self.norm2 = RmsNorm(hidden_size, eps=1e-6)
+        self.cross_attn = CrossAttention(
+            dim=hidden_size,
+            num_heads=num_heads,
+            qkv_bias=True, qk_norm=True,
+            norm_layer=RmsNorm,
+        )
+        self.norm3 = RmsNorm(hidden_size, eps=1e-6)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.ffn = Mlp(in_features=hidden_size,
+            hidden_features=hidden_size,
+            act_layer=approx_gelu, drop=0)
+
+    def forward(self, x, vision_tokens):
+        """
+        Args:
+            x: [B, T+2, D]
+            vision_tokens: [B, V, D]
+        Returns:
+            [B, T+2, D]
+        """
+        x = x + self.attn(self.norm1(x))
+        x = x + self.cross_attn(self.norm2(x), vision_tokens)
+        x = x + self.ffn(self.norm3(x))
         return x
 
 
@@ -194,8 +231,6 @@ def test_dit_architecture():
     # print(x.shape, c.shape)
     
     # 3. 测试 DiT_Block
-    # 注意：你的代码中 CrossAttention 初始化参数名是 hidden_size，但类定义里是 dim
-    # 这里需要确保参数名对应。根据你提供的类定义，初始化应传 dim
     block = DiT_Block(hidden_size=hidden_size, num_heads=8).to(device)
     
     # 执行前向传播
@@ -206,7 +241,7 @@ def test_dit_architecture():
     # 4. 测试 FinalLayer
     final_layer = FinalLayer(hidden_size=hidden_size, out_dim=out_dim).to(device)
     final_out = final_layer(block_output)
-    print(f"Final Layer Output: {final_out.shape}") # 预期: [2, 10, 7]
+    print(f"Final Layer Output: {final_out.shape}") # 预期: [2, 10, 1]
     assert final_out.shape == (batch_size, action_seq_len, out_dim)
 
     print("--- 所有模块 Shape 验证通过！ ---")
